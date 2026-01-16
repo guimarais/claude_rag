@@ -6,10 +6,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     # Backend
-    "fastapi==0.104.1",
-    "uvicorn[standard]==0.24.0",
-    "python-multipart==0.0.6",
-    "httpx==0.25.2",
+    "fastapi>=0.115.0",  # Updated: for anyio 4.x compatibility with mcp
+    "uvicorn[standard]>=0.31.1",  # Updated: required by mcp 1.25.0
+    "python-multipart>=0.0.9",  # Updated: required by mcp 1.25.0
+    "httpx>=0.27.0",  # Updated: required by chromadb 1.4.1
 
     # Document Processing
     "pypdf==3.17.0",
@@ -22,19 +22,20 @@ dependencies = [
     "beautifulsoup4==4.12.2",
     "html5lib==1.1",
     "trafilatura==1.6.2",
-    "lxml==4.9.3",
+    "lxml>=4.9.2",
 
     # Retrieval
-    "chromadb==0.4.18",
+    "chromadb==1.4.1",  # Fixed: precompiled wheels, no C++ build needed
     "rank-bm25==0.2.2",
-    "sentence-transformers==2.2.2",
+    "sentence-transformers==2.7.0",  # Updated for torch compatibility
 
-    # Image Processing
+    # Image Processing / ML
     "Pillow==10.1.0",
-    "transformers==4.35.2",
+    "transformers==4.42.0",  # Updated for sentence-transformers compatibility
+    "torch==2.4.0",  # Added: explicit version with CUDA support
 
     # MCP
-    "mcp==0.1.0",
+    "mcp==1.25.0",  # Fixed: correct version
 
     # Frontend
     "streamlit==1.28.1",
@@ -44,5 +45,6 @@ dependencies = [
     "pyyaml==6.0.1",
 
     # Text Processing
-    "langchain==0.0.335",
+    "langchain==1.2.4",  # Updated: stable 1.x version
+    "langchain-core==1.2.7",  # Added: required for langchain 1.x
 ]
