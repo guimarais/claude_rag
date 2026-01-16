@@ -1,0 +1,49 @@
+# Collections configuration for RAG system
+# Each collection has its own vector store, chunking strategy, and source
+
+collections:
+  technical_docs:
+    description: "Technical documentation and API references"
+    chunk_size: 1000
+    chunk_overlap: 200
+    embedding_model: "nomic-embed-text-v1.5"
+    source_url: ""  # Blank = use local files directory
+    files_directory: "./files/technical_docs"
+
+  customer_support:
+    description: "Customer FAQs and support articles"
+    chunk_size: 500
+    chunk_overlap: 100
+    embedding_model: "nomic-embed-text-v1.5"
+    source_url: ""  # Blank = use local files directory
+    files_directory: "./files/customer_support"
+
+  financial_reports:
+    description: "Financial statements and analysis"
+    chunk_size: 1500
+    chunk_overlap: 300
+    embedding_model: "nomic-embed-text-v1.5"
+    source_url: ""  # Blank = use local files directory
+    files_directory: "./files/financial_reports"
+
+  web_articles:
+    description: "Web articles and blog posts"
+    chunk_size: 800
+    chunk_overlap: 150
+    embedding_model: "nomic-embed-text-v1.5"
+    source_url: ""  # Example: "https://blog.example.com/"
+    files_directory: "./files/web_articles"
+
+# Routing rules for automatic collection assignment based on filename
+routing_rules:
+  - pattern: "*.pdf"
+    collection: "technical_docs"
+  - pattern: "FAQ_*.docx"
+    collection: "customer_support"
+  - pattern: "*_financial_*.xlsx"
+    collection: "financial_reports"
+  - pattern: "*.html"
+    collection: "web_articles"
+
+# Default source location when source_url is blank
+default_files_directory: "./files"
