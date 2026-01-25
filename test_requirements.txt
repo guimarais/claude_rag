@@ -1,0 +1,4 @@
+# Minimal requirements for testing PDF parser
+pypdf==3.17.0
+pdfplumber==0.10.3
+reportlab==4.0.7
