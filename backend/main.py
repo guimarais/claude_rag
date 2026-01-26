@@ -7,10 +7,34 @@ This module provides the main FastAPI application with endpoints for:
 - Status monitoring
 """
 
-from typing import List, Optional
+from typing import List, Optional, Dict
+from datetime import datetime
+from pathlib import Path
+import tempfile
+import shutil
+import uuid
+import logging
+
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+from backend.ingestion.parsers import parse_pdf, parse_document
+from backend.ingestion.chunking import create_chunks_with_metadata
+from backend.models.embeddings import EmbeddingModel
+from backend.retrieval.vector_store import VectorStore
+from backend.config.loader import (
+    load_collections_config,
+    get_collection_config,
+    determine_collection
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 app = FastAPI(
@@ -27,6 +51,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize components
+logger.info("Initializing embedding model and vector store...")
+embedding_model = EmbeddingModel(model_name="nomic-ai/nomic-embed-text-v1.5")
+vector_store = VectorStore(persist_directory="./vector_db")
+
+# In-memory job tracking
+jobs_db: Dict[str, Dict] = {}
+
+logger.info("Backend initialization complete")
 
 
 # Request/Response Models
@@ -72,7 +106,7 @@ async def root():
 
 @app.post("/api/ingest", response_model=IngestResponse)
 async def ingest_documents(
-    files: List[UploadFile] = File(None),
+    files: List[UploadFile] = File(...),
     collection: Optional[str] = None,
     fetch_from_config: bool = False
 ):
@@ -86,8 +120,143 @@ async def ingest_documents(
     Returns:
         IngestResponse with job_id, status, and processed count
     """
-    # TODO: Implement document ingestion pipeline
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    # Generate job ID
+    job_id = str(uuid.uuid4())
+
+    # Initialize job tracking
+    jobs_db[job_id] = {
+        "status": "processing",
+        "processed_count": 0,
+        "total_count": len(files),
+        "errors": [],
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat()
+    }
+
+    logger.info(f"Starting ingestion job {job_id} with {len(files)} files")
+
+    try:
+        processed_count = 0
+
+        # Process each uploaded file
+        for upload_file in files:
+            try:
+                logger.info(f"Processing file: {upload_file.filename}")
+
+                # Determine target collection
+                target_collection = determine_collection(upload_file.filename, collection)
+                collection_config = get_collection_config(target_collection)
+
+                if not collection_config:
+                    raise ValueError(f"Collection '{target_collection}' not found in configuration")
+
+                logger.info(f"Routing {upload_file.filename} to collection: {target_collection}")
+
+                # Save uploaded file to temp location
+                temp_dir = Path(tempfile.mkdtemp())
+                temp_file = temp_dir / upload_file.filename
+
+                with open(temp_file, "wb") as f:
+                    shutil.copyfileobj(upload_file.file, f)
+
+                logger.info(f"Saved to temp file: {temp_file}")
+
+                # Parse document based on file extension
+                if upload_file.filename.lower().endswith('.pdf'):
+                    parsed_doc = parse_pdf(temp_file)
+                else:
+                    parsed_doc = parse_document(temp_file)
+
+                # Check parse status
+                if parsed_doc['status'] == 'error':
+                    error_msg = f"Parse errors: {'; '.join(parsed_doc.get('errors', ['Unknown error']))}"
+                    jobs_db[job_id]['errors'].append({
+                        'file': upload_file.filename,
+                        'error': error_msg
+                    })
+                    logger.error(f"Failed to parse {upload_file.filename}: {error_msg}")
+                    # Clean up and continue
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    continue
+
+                logger.info(f"Successfully parsed {upload_file.filename} with status: {parsed_doc['status']}")
+
+                # Chunk the document
+                chunks = create_chunks_with_metadata(
+                    parsed_doc,
+                    chunk_size=collection_config.get('chunk_size', 1000),
+                    chunk_overlap=collection_config.get('chunk_overlap', 200)
+                )
+
+                if not chunks:
+                    error_msg = "No text content to chunk"
+                    jobs_db[job_id]['errors'].append({
+                        'file': upload_file.filename,
+                        'error': error_msg
+                    })
+                    logger.warning(f"No chunks created from {upload_file.filename}")
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    continue
+
+                logger.info(f"Created {len(chunks)} chunks from {upload_file.filename}")
+
+                # Extract texts and metadata
+                texts = [chunk['text'] for chunk in chunks]
+                metadatas = [chunk['metadata'] for chunk in chunks]
+
+                # Generate embeddings
+                logger.info(f"Generating embeddings for {len(texts)} chunks...")
+                embeddings = embedding_model.encode_documents(texts)
+
+                # Add to vector store
+                logger.info(f"Storing chunks in collection: {target_collection}")
+                vector_store.add_documents(
+                    texts=texts,
+                    embeddings=embeddings,
+                    metadatas=metadatas,
+                    collection_name=target_collection
+                )
+
+                processed_count += 1
+                logger.info(f"Successfully ingested {upload_file.filename}")
+
+                # Clean up temp file
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+            except Exception as e:
+                error_msg = str(e)
+                jobs_db[job_id]['errors'].append({
+                    'file': upload_file.filename,
+                    'error': error_msg
+                })
+                logger.error(f"Error processing {upload_file.filename}: {error_msg}", exc_info=True)
+
+        # Update job status
+        jobs_db[job_id]['processed_count'] = processed_count
+        jobs_db[job_id]['updated_at'] = datetime.now().isoformat()
+
+        if processed_count == 0:
+            jobs_db[job_id]['status'] = 'failed'
+        elif jobs_db[job_id]['errors']:
+            jobs_db[job_id]['status'] = 'partial'
+        else:
+            jobs_db[job_id]['status'] = 'completed'
+
+        logger.info(f"Job {job_id} finished with status: {jobs_db[job_id]['status']}, "
+                   f"processed {processed_count}/{len(files)} files")
+
+        return IngestResponse(
+            job_id=job_id,
+            status=jobs_db[job_id]['status'],
+            processed_count=processed_count
+        )
+
+    except Exception as e:
+        logger.error(f"Critical error in ingestion job {job_id}: {str(e)}", exc_info=True)
+        jobs_db[job_id]['status'] = 'failed'
+        jobs_db[job_id]['errors'].append({'error': str(e)})
+        jobs_db[job_id]['updated_at'] = datetime.now().isoformat()
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
 
 
 @app.post("/api/ingest/from-config", response_model=IngestResponse)
@@ -143,8 +312,10 @@ async def get_job_status(job_id: str):
     Returns:
         Job status and progress information
     """
-    # TODO: Implement job status tracking
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    if job_id not in jobs_db:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    return jobs_db[job_id]
 
 
 @app.delete("/api/documents/{doc_id}")
@@ -171,8 +342,17 @@ async def get_collection_stats(name: str):
     Returns:
         CollectionStats with document and chunk counts
     """
-    # TODO: Implement collection statistics
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    try:
+        stats = vector_store.get_collection_stats(name)
+        return CollectionStats(
+            name=stats['name'],
+            document_count=stats['count'],
+            chunk_count=stats['count'],  # In our case, chunks are documents
+            last_updated=datetime.now().isoformat()
+        )
+    except Exception as e:
+        logger.error(f"Error getting stats for collection {name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get collection stats: {str(e)}")
 
 
 @app.post("/api/collections/{name}/refresh")

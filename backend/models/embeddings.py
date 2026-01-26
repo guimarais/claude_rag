@@ -27,10 +27,9 @@ class EmbeddingModel:
             model_name: Name of sentence-transformers model
             device: Device to run model on ('cpu' or 'cuda')
         """
-        # TODO: Initialize sentence-transformers model
         self.model_name = model_name
         self.device = device
-        self.model = None
+        self.model = SentenceTransformer(model_name, device=device, trust_remote_code=True)
 
     def encode(
         self,
@@ -48,8 +47,22 @@ class EmbeddingModel:
         Returns:
             Single embedding or list of embeddings
         """
-        # TODO: Implement embedding generation
-        pass
+        if isinstance(texts, str):
+            texts = [texts]
+            single = True
+        else:
+            single = False
+
+        embeddings = self.model.encode(
+            texts,
+            batch_size=batch_size,
+            show_progress_bar=show_progress,
+            convert_to_numpy=True
+        )
+
+        if single:
+            return embeddings[0].tolist()
+        return [emb.tolist() for emb in embeddings]
 
     def encode_query(self, query: str) -> List[float]:
         """Generate embedding for search query.
@@ -62,8 +75,10 @@ class EmbeddingModel:
         Returns:
             Query embedding vector
         """
-        # TODO: Implement query embedding
-        pass
+        # nomic-embed uses special prefix for queries
+        prefixed_query = f"search_query: {query}"
+        embedding = self.model.encode(prefixed_query, convert_to_numpy=True)
+        return embedding.tolist()
 
     def encode_documents(self, documents: List[str]) -> List[List[float]]:
         """Generate embeddings for documents.
@@ -74,8 +89,10 @@ class EmbeddingModel:
         Returns:
             List of document embeddings
         """
-        # TODO: Implement document embedding
-        pass
+        # nomic-embed uses special prefix for documents
+        prefixed_docs = [f"search_document: {doc}" for doc in documents]
+        embeddings = self.model.encode(prefixed_docs, convert_to_numpy=True)
+        return [emb.tolist() for emb in embeddings]
 
     @property
     def embedding_dimension(self) -> int:
@@ -84,5 +101,4 @@ class EmbeddingModel:
         Returns:
             Dimension of embedding vectors
         """
-        # TODO: Return embedding dimension
-        pass
+        return self.model.get_sentence_embedding_dimension()
