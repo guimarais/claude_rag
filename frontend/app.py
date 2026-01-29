@@ -10,6 +10,23 @@ This module provides a user-friendly web interface for:
 
 import streamlit as st
 from typing import List, Dict, Any
+import sys
+from pathlib import Path
+
+# Add project root to path for imports when running with streamlit
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+# Now import the API client
+try:
+    from frontend.api_client import RAGAPIClient
+except ImportError:
+    # Fallback for different execution contexts
+    from api_client import RAGAPIClient
+
+# Initialize API client
+api_client = RAGAPIClient(base_url="http://localhost:8000")
 
 
 # Page configuration
@@ -37,16 +54,22 @@ def ingest_documents(
     files: List,
     collection: str,
     fetch_from_config: bool = False
-):
+) -> Dict[str, Any]:
     """Upload and ingest documents via backend API.
 
     Args:
         files: List of uploaded files
         collection: Target collection name
         fetch_from_config: Whether to fetch from source_url
+
+    Returns:
+        Ingestion response from API
     """
-    # TODO: Implement API call to /api/ingest
-    pass
+    return api_client.ingest_documents(
+        files=files,
+        collection=collection,
+        fetch_from_config=fetch_from_config
+    )
 
 
 def search_query(query: str, collection: str = None) -> Dict[str, Any]:
@@ -72,8 +95,7 @@ def get_collection_stats(collection: str) -> Dict[str, Any]:
     Returns:
         Statistics dictionary
     """
-    # TODO: Implement API call to /api/collections/{name}/stats
-    pass
+    return api_client.get_collection_stats(collection)
 
 
 # Sidebar: Document upload and collection management
@@ -99,10 +121,35 @@ with st.sidebar:
     if st.button("📥 Ingest Documents", type="primary"):
         if uploaded_files:
             with st.spinner("Processing documents..."):
-                # TODO: Call ingest_documents()
-                st.success(f"✅ Ingested {len(uploaded_files)} document(s)")
+                result = ingest_documents(
+                    files=uploaded_files,
+                    collection=collection if collection != "Auto-route" else None
+                )
+
+                # Display results
+                if "error" in result:
+                    st.error(f"❌ Error: {result['error']}")
+                elif result.get("status") == "completed":
+                    st.success(f"✅ Successfully ingested {result['processed_count']} document(s)")
+                    st.info(f"📋 Job ID: `{result.get('job_id', 'N/A')}`")
+
+                    # Show any errors if partial success
+                    if result.get("errors"):
+                        with st.expander("⚠️ Warnings", expanded=False):
+                            for error in result["errors"]:
+                                st.warning(f"File: {error.get('file', 'unknown')} - {error.get('error', 'unknown error')}")
+                elif result.get("status") == "partial":
+                    st.warning(f"⚠️ Partially ingested {result['processed_count']} document(s)")
+                    st.info(f"📋 Job ID: `{result.get('job_id', 'N/A')}`")
+
+                    if result.get("errors"):
+                        with st.expander("❌ Errors", expanded=True):
+                            for error in result["errors"]:
+                                st.error(f"File: {error.get('file', 'unknown')} - {error.get('error', 'unknown error')}")
+                else:
+                    st.error(f"❌ Ingestion failed: {result.get('status', 'unknown status')}")
         else:
-            st.warning("Please upload files first")
+            st.warning("⚠️ Please upload files first")
 
     st.divider()
 
@@ -125,8 +172,19 @@ with st.sidebar:
     # Collection stats
     st.header("📊 Collections")
     if st.button("🔍 View Stats"):
-        # TODO: Display collection statistics
-        st.info("Collection statistics will appear here")
+        collections = ["technical_docs", "customer_support", "financial_reports", "web_articles"]
+
+        for coll in collections:
+            stats = get_collection_stats(coll)
+
+            if "error" not in stats:
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.text(f"📁 {coll}")
+                with col2:
+                    st.metric("Documents", stats.get("document_count", 0))
+            else:
+                st.text(f"📁 {coll}: No data")
 
 
 # Main area: Query interface

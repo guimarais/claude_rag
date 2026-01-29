@@ -40,8 +40,31 @@ class RAGAPIClient:
         Returns:
             Ingestion response with job_id and status
         """
-        # TODO: Implement POST request to /api/ingest
-        pass
+        url = f"{self.base_url}/api/ingest"
+
+        # Prepare files for multipart upload
+        files_data = [
+            ("files", (file.name, file.getvalue(), file.type))
+            for file in files
+        ]
+
+        # Prepare form data
+        data = {}
+        if collection and collection != "Auto-route":
+            data["collection"] = collection
+        if fetch_from_config:
+            data["fetch_from_config"] = "true"
+
+        try:
+            response = self.session.post(url, files=files_data, data=data, timeout=300)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            return {
+                "error": str(e),
+                "status": "failed",
+                "processed_count": 0
+            }
 
     def ingest_from_config(
         self,
@@ -97,8 +120,17 @@ class RAGAPIClient:
         Returns:
             Job status and progress information
         """
-        # TODO: Implement GET request to /api/status/{job_id}
-        pass
+        url = f"{self.base_url}/api/status/{job_id}"
+
+        try:
+            response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            return {
+                "error": str(e),
+                "status": "unknown"
+            }
 
     def get_collection_stats(self, collection: str) -> Dict[str, Any]:
         """Get statistics for a collection.
@@ -109,8 +141,19 @@ class RAGAPIClient:
         Returns:
             Statistics dictionary
         """
-        # TODO: Implement GET request to /api/collections/{name}/stats
-        pass
+        url = f"{self.base_url}/api/collections/{collection}/stats"
+
+        try:
+            response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            return {
+                "error": str(e),
+                "name": collection,
+                "document_count": 0,
+                "chunk_count": 0
+            }
 
     def refresh_collection(self, collection: str) -> Dict[str, Any]:
         """Trigger refresh of collection from source_url.
