@@ -7,6 +7,8 @@ persistent storage.
 
 from typing import List, Dict, Any
 import chromadb
+from chromadb.config import Settings
+import uuid
 
 
 class VectorStore:
@@ -25,8 +27,11 @@ class VectorStore:
         Args:
             persist_directory: Path for persistent storage
         """
-        # TODO: Initialize ChromaDB client
-        pass
+        self.client = chromadb.PersistentClient(
+            path=persist_directory,
+            settings=Settings(anonymized_telemetry=False)
+        )
+        self.persist_directory = persist_directory
 
     def add_documents(
         self,
@@ -43,8 +48,24 @@ class VectorStore:
             metadatas: List of metadata dictionaries
             collection_name: Target collection
         """
-        # TODO: Implement document insertion
-        pass
+        collection = self.client.get_or_create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"}
+        )
+
+        # Generate unique IDs
+        ids = [str(uuid.uuid4()) for _ in texts]
+
+        # Clean metadata to only include primitive types
+        clean_metadatas = [self._clean_metadata(m) for m in metadatas]
+
+        # Add to collection
+        collection.add(
+            ids=ids,
+            embeddings=embeddings,
+            documents=texts,
+            metadatas=clean_metadatas
+        )
 
     def search(
         self,
@@ -64,8 +85,28 @@ class VectorStore:
         Returns:
             List of results with text, metadata, and similarity scores
         """
-        # TODO: Implement vector search
-        pass
+        try:
+            collection = self.client.get_collection(collection_name)
+        except Exception:
+            return []
+
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k,
+            where=filter_dict
+        )
+
+        # Format results
+        formatted = []
+        if results['ids'] and len(results['ids'][0]) > 0:
+            for i in range(len(results['ids'][0])):
+                formatted.append({
+                    'id': results['ids'][0][i],
+                    'text': results['documents'][0][i],
+                    'metadata': results['metadatas'][0][i],
+                    'distance': results['distances'][0][i] if 'distances' in results else None
+                })
+        return formatted
 
     def get_collection_stats(self, collection_name: str) -> Dict[str, Any]:
         """Get statistics for a collection.
@@ -76,8 +117,20 @@ class VectorStore:
         Returns:
             Statistics dictionary with counts and metadata
         """
-        # TODO: Implement statistics gathering
-        pass
+        try:
+            collection = self.client.get_collection(collection_name)
+            count = collection.count()
+            return {
+                "name": collection_name,
+                "count": count,
+                "metadata": collection.metadata
+            }
+        except Exception:
+            return {
+                "name": collection_name,
+                "count": 0,
+                "metadata": {}
+            }
 
     def delete_document(self, doc_id: str, collection_name: str):
         """Delete document from collection.
@@ -86,5 +139,27 @@ class VectorStore:
             doc_id: Document identifier
             collection_name: Collection name
         """
-        # TODO: Implement document deletion
-        pass
+        collection = self.client.get_collection(collection_name)
+        collection.delete(ids=[doc_id])
+
+    def _clean_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert metadata values to ChromaDB-compatible types.
+
+        ChromaDB only accepts str, int, float, or bool values.
+
+        Args:
+            metadata: Original metadata dictionary
+
+        Returns:
+            Cleaned metadata dictionary
+        """
+        cleaned = {}
+        for key, value in metadata.items():
+            if isinstance(value, (str, int, float, bool)):
+                cleaned[key] = value
+            elif value is None:
+                cleaned[key] = ""
+            else:
+                # Convert other types to string
+                cleaned[key] = str(value)
+        return cleaned
